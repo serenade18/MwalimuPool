@@ -85,6 +85,114 @@ class UserAccount(AbstractBaseUser, PermissionsMixin):
         return f"{self.email} ({self.user_type})"
 
 # ============================
+# TEACHER PROFILE MODEL
+# ============================
+
+class TeacherProfile(models.Model):
+    VETTING_STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+    ]
+
+    user = models.OneToOneField(UserAccount, on_delete=models.CASCADE, related_name="teacher_profile")
+    full_name = models.CharField(max_length=255)
+    subjects = models.JSONField(default=list, blank=True)
+    counties = models.JSONField(default=list, blank=True)
+    availability = models.JSONField(default=list, blank=True)
+    rate_per_session = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    bio = models.TextField(blank=True)
+    tsc_cert_url = models.URLField(blank=True, null=True)
+    degree_url = models.URLField(blank=True, null=True)
+    national_id_url = models.URLField(blank=True, null=True)
+    vetting_status = models.CharField(max_length=20, choices=VETTING_STATUS_CHOICES, default="pending")
+    is_verified = models.BooleanField(default=False)
+    rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    session_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "teacher_profiles"
+
+    def __str__(self):
+        return f"{self.full_name} — Teacher Profile"
+
+# ============================
+# SCHOOL PROFILE MODEL
+# ============================
+
+class SchoolProfile(models.Model):
+    user = models.OneToOneField(UserAccount, on_delete=models.CASCADE, related_name="school_profile")
+    school_name = models.CharField(max_length=255)
+    knec_code = models.CharField(max_length=50, blank=True)
+    county = models.CharField(max_length=100)
+    headteacher_name = models.CharField(max_length=255)
+    email = models.EmailField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "school_profiles"
+
+    def __str__(self):
+        return self.school_name
+
+# ============================
+# JOB POSTING MODEL
+# ============================
+
+class JobPosting(models.Model):
+    STATUS_CHOICES = [
+        ("open", "Open"),
+        ("filled", "Filled"),
+        ("closed", "Closed"),
+    ]
+
+    school = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name="job_postings")
+    subject = models.CharField(max_length=100)
+    grade_level = models.CharField(max_length=50)
+    sessions_per_week = models.PositiveIntegerField()
+    preferred_days = models.JSONField(default=list, blank=True)
+    duration_weeks = models.PositiveIntegerField()
+    budget_per_session = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="open")
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "job_postings"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.subject} — {self.grade_level}"
+
+# ============================
+# JOB APPLICATION MODEL
+# ============================
+
+class JobApplication(models.Model):
+    STATUS_CHOICES = [
+        ("applied", "Applied"),
+        ("shortlisted", "Shortlisted"),
+        ("rejected", "Rejected"),
+    ]
+
+    job = models.ForeignKey(JobPosting, on_delete=models.CASCADE, related_name="applications")
+    teacher = models.ForeignKey(UserAccount, on_delete=models.CASCADE, related_name="applications")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="applied")
+    cover_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "job_applications"
+        unique_together = ("job", "teacher")
+
+    def __str__(self):
+        return f"{self.teacher} → {self.job}"
+
+# ============================
 # BOOKING MODEL
 # ============================
 
