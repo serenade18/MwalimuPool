@@ -13,13 +13,12 @@ from django.utils.encoding import force_bytes, force_str
 
 from mwalimuApp.models import UserAccount, TeacherProfile, SchoolProfile, JobPosting, \
     JobApplication, Booking, Payment, Rating, Dispute
+from mwalimuApp.permissions import IsAdminRole, IsSchoolRole, IsTeacherRole, any_of
 
 from mwalimuApp.serializers import UserSerializer, AuthUserSerializer, \
     TeacherProfileSerializer, SchoolProfileSerializer,JobPostingSerializer, \
     JobApplicationSerializer, BookingSerializer, PaymentSerializer, RatingSerializer, \
     DisputeSerializer
-
-from permissions import IsAdminRole, IsSchoolRole, IsTeacherRole, any_of
 
 
 def _make_tokens(user):
