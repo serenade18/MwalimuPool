@@ -465,6 +465,24 @@ class TeacherProfileViewSet(viewsets.ViewSet):
                 "message": str(e),
             }, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=False, methods=["get"], url_path="mine")
+    def mine(self, request):
+        try:
+            profile = TeacherProfile.objects.select_related("user").get(
+                user=request.user
+            )
+
+            return Response({
+                "error": False,
+                "data": TeacherProfileSerializer(profile).data,
+            })
+
+        except TeacherProfile.DoesNotExist:
+            return Response({
+                "error": True,
+                "message": "Teacher profile not found",
+            }, status=status.HTTP_404_NOT_FOUND)
+
 # ============================================================
 # SCHOOL PROFILE VIEWSET
 # ============================================================
