@@ -280,6 +280,10 @@ class UserViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response({"error": True, "message": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=False, methods=["get"])
+    def userinfo(self, request):
+        return Response(AuthUserSerializer(request.user).data)
+
 # ============================================================
 # TEACHER PROFILE VIEWSET
 # ============================================================
@@ -603,6 +607,24 @@ class SchoolProfileViewSet(viewsets.ViewSet):
                 "error": False,
                 "message": "School profile deleted",
             })
+        except SchoolProfile.DoesNotExist:
+            return Response({
+                "error": True,
+                "message": "School profile not found",
+            }, status=status.HTTP_404_NOT_FOUND)
+
+    @action(detail=False, methods=["get"], url_path="mine")
+    def mine(self, request):
+        try:
+            profile = SchoolProfile.objects.select_related("user").get(
+                user=request.user
+            )
+
+            return Response({
+                "error": False,
+                "data": SchoolProfileSerializer(profile).data,
+            })
+
         except SchoolProfile.DoesNotExist:
             return Response({
                 "error": True,
