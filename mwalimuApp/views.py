@@ -15,6 +15,12 @@ from django.utils.encoding import force_bytes, force_str
 from mwalimuApp.models import UserAccount, TeacherProfile, SchoolProfile, JobPosting, \
     JobApplication, Booking, Payment, Rating, Dispute
 from mwalimuApp.permissions import IsAdminRole, IsSchoolRole, IsTeacherRole, any_of
+from mwalimuApp.emails import (
+    send_activation_email,
+    send_teacher_kyc_pending_email,
+    send_kyc_approved_email,
+    send_kyc_rejected_email,
+)
 
 from mwalimuApp.serializers import UserSerializer, AuthUserSerializer, \
     TeacherProfileSerializer, SchoolProfileSerializer,JobPostingSerializer, \
@@ -40,7 +46,7 @@ class UserViewSet(viewsets.ViewSet):
     """
 
     def get_permissions(self):
-        if self.action in ("create", "login", "forgot_password", "reset_password"):
+        if self.action in ("create", "login", "forgot_password", "reset_password", "activate"):
             return [AllowAny()]
         if self.action in ("list", "update_status"):
             return [IsAdminRole()]
@@ -65,10 +71,12 @@ class UserViewSet(viewsets.ViewSet):
 
             user = serializer.save()
 
-            # Teachers start inactive until documents are uploaded + admin vets them
+            # Teachers: active so they can complete onboarding, but blocked from
+            # logging in again once KYC has been submitted (handled in create profile).
+            # No activation email — they're activated only after admin approves KYC.
             if user.user_type == UserAccount.UserTypes.TEACHER:
                 user.account_status = UserAccount.AccountStatus.VETTING_MISSING
-                user.is_active = True   # allow login so they can complete onboarding
+                user.is_active = True
                 user.save(update_fields=["account_status", "is_active"])
                 TeacherProfile.objects.get_or_create(
                     user=user,
@@ -76,8 +84,10 @@ class UserViewSet(viewsets.ViewSet):
                 )
 
             elif user.user_type == UserAccount.UserTypes.SCHOOL:
-                user.is_active = True
-                user.save(update_fields=["is_active"])
+                # Schools must click activation link before they can log in.
+                user.is_active = False
+                user.account_status = UserAccount.AccountStatus.INACTIVE
+                user.save(update_fields=["is_active", "account_status"])
                 SchoolProfile.objects.get_or_create(
                     user=user,
                     defaults={
@@ -87,6 +97,22 @@ class UserViewSet(viewsets.ViewSet):
                         "email": user.email,
                     },
                 )
+                send_activation_email(user)
+
+            elif user.user_type == UserAccount.UserTypes.ADMIN:
+                # Admins are activated immediately and receive no email.
+                user.is_active = True
+                user.account_status = UserAccount.AccountStatus.ACTIVE
+                user.save(update_fields=["is_active", "account_status"])
+
+            # Schools must activate via email before getting tokens.
+            if user.user_type == UserAccount.UserTypes.SCHOOL:
+                return Response({
+                    "error": False,
+                    "message": "Account created. Check your email to activate your account.",
+                    "requires_activation": True,
+                    "user": AuthUserSerializer(user).data,
+                }, status=status.HTTP_201_CREATED)
 
             access, refresh = _make_tokens(user)
             return Response({
@@ -163,7 +189,26 @@ class UserViewSet(viewsets.ViewSet):
                     "user_type": user.user_type,
                 }, status=status.HTTP_403_FORBIDDEN)
 
-            if user.account_status in (A.VETTING_PENDING, A.VETTING_MISSING, A.VETTING_REJECTED):
+            # Teachers awaiting admin approval cannot log in.
+            if user.user_type == UserAccount.UserTypes.TEACHER and \
+                    user.account_status == A.VETTING_PENDING:
+                return Response({
+                    "error": True,
+                    "message": "Your KYC submission is awaiting admin approval. "
+                               "You'll receive an email once your account is approved.",
+                    "account_status": user.account_status,
+                    "user_type": user.user_type,
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Schools that haven't clicked the activation link yet.
+            if not user.is_active and user.user_type == UserAccount.UserTypes.SCHOOL:
+                return Response({
+                    "error": True,
+                    "message": "Please activate your account from the email we sent you.",
+                    "user_type": user.user_type,
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            if user.account_status in (A.VETTING_MISSING, A.VETTING_REJECTED):
                 access, refresh = _make_tokens(user)
                 return Response({
                     "error": True,
@@ -242,6 +287,35 @@ class UserViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response({"error": True, "message": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    # GET /activate/<uidb64>/<token>/
+    @action(detail=False, methods=["get", "post"], url_path="activate",
+            permission_classes=[AllowAny])
+    def activate(self, request, uidb64=None, token=None):
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = UserAccount.objects.get(pk=uid)
+        except Exception:
+            return Response({"error": True, "message": "Invalid activation link"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({"error": True, "message": "Activation link expired or invalid"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.is_active:
+            user.is_active = True
+            user.account_status = UserAccount.AccountStatus.ACTIVE
+            user.save(update_fields=["is_active", "account_status"])
+
+        access, refresh = _make_tokens(user)
+        return Response({
+            "error": False,
+            "message": "Account activated",
+            "access": access,
+            "refresh": refresh,
+            "user": AuthUserSerializer(user).data,
+        })
+
     # PATCH /users/<pk>/status/  (admin only)
     @action(detail=True, methods=["patch"], url_path="status",
             permission_classes=[IsAdminRole])
@@ -270,7 +344,17 @@ class UserViewSet(viewsets.ViewSet):
                     user.teacher_profile.vetting_status = "rejected"
                     user.teacher_profile.save(update_fields=["vetting_status"])
 
+            # Re-activate teachers on approval, send notification emails.
+            if new_status == A.ACTIVE:
+                user.is_active = True
             user.save()
+
+            if user.user_type == UserAccount.UserTypes.TEACHER:
+                if new_status == A.ACTIVE:
+                    send_kyc_approved_email(user)
+                elif new_status == A.VETTING_REJECTED:
+                    send_kyc_rejected_email(user, notes=moderation_notes)
+
             return Response({
                 "error": False,
                 "message": "User status updated",
@@ -367,9 +451,15 @@ class TeacherProfileViewSet(viewsets.ViewSet):
             # Promote account_status to vetting_pending once docs are uploaded
             has_docs = request.data.get("tsc_cert_url") or request.data.get("degree_url") or \
                        request.data.get("national_id_url")
-            if has_docs and request.user.account_status == UserAccount.AccountStatus.VETTING_MISSING:
+            if has_docs and request.user.account_status in (
+                UserAccount.AccountStatus.VETTING_MISSING,
+                UserAccount.AccountStatus.VETTING_REJECTED,
+            ):
                 request.user.account_status = UserAccount.AccountStatus.VETTING_PENDING
-                request.user.save(update_fields=["account_status"])
+                # Block further logins until admin approves.
+                request.user.is_active = False
+                request.user.save(update_fields=["account_status", "is_active"])
+                send_teacher_kyc_pending_email(request.user)
 
             return Response({
                 "error": False,

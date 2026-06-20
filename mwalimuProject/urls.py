@@ -32,6 +32,8 @@ urlpatterns = [
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/password-reset/", UserViewSet.as_view({"post": "forgot_password"})),
     path("api/password-reset/confirm/", UserViewSet.as_view({"post": "reset_password"})),
+    path("api/activate/<str:uidb64>/<str:token>/",
+         UserViewSet.as_view({"get": "activate", "post": "activate"})),
 ]
 
 if settings.DEBUG:
