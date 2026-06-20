@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'mwalimuApp',
+    'sendgrid_backend',
 ]
 
 MIDDLEWARE = [
@@ -85,6 +86,11 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": False,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+EMAIL_BACKEND = 'sendgrid_backend.SendgridBackend'
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY', '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')
+SENDGRID_SANDBOX_MODE_IN_DEBUG = False
+DEFAULT_FROM_EMAIL = 'Mwalimu Pool <noreply@mwalimupool.co.ke>'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
