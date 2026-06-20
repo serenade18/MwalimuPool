@@ -3,6 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth.tokens import default_token_generator
@@ -280,10 +281,6 @@ class UserViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response({"error": True, "message": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=["get"])
-    def userinfo(self, request):
-        return Response(AuthUserSerializer(request.user).data)
-
 # ============================================================
 # TEACHER PROFILE VIEWSET
 # ============================================================
@@ -297,6 +294,7 @@ class TeacherProfileViewSet(viewsets.ViewSet):
     DELETE /teachers/<pk>/      Admin deletes profile
     GET    /teachers/vetting/   Admin vetting queue (pending profiles)
     """
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_permissions(self):
         if self.action == "list":
@@ -607,24 +605,6 @@ class SchoolProfileViewSet(viewsets.ViewSet):
                 "error": False,
                 "message": "School profile deleted",
             })
-        except SchoolProfile.DoesNotExist:
-            return Response({
-                "error": True,
-                "message": "School profile not found",
-            }, status=status.HTTP_404_NOT_FOUND)
-
-    @action(detail=False, methods=["get"], url_path="mine")
-    def mine(self, request):
-        try:
-            profile = SchoolProfile.objects.select_related("user").get(
-                user=request.user
-            )
-
-            return Response({
-                "error": False,
-                "data": SchoolProfileSerializer(profile).data,
-            })
-
         except SchoolProfile.DoesNotExist:
             return Response({
                 "error": True,

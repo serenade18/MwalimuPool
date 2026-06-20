@@ -55,6 +55,9 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source="user.name", read_only=True)
     user_phone = serializers.CharField(source="user.phone", read_only=True)
     account_status = serializers.CharField(source="user.account_status", read_only=True)
+    tsc_cert_url = serializers.FileField(required=False, allow_null=True, use_url=True)
+    degree_url = serializers.FileField(required=False, allow_null=True, use_url=True)
+    national_id_url = serializers.FileField(required=False, allow_null=True, use_url=True)
 
     class Meta:
         model = TeacherProfile
