@@ -4,6 +4,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 
 from mwalimuApp.models import TeacherProfile, Rating, Payment, Booking, JobApplication, Dispute, JobPosting, \
     SchoolProfile
+from mwalimuApp.models import Wallet, WalletTransaction, SasaPayTransaction, Escrow
 
 User = get_user_model()
 
@@ -200,3 +201,46 @@ class DisputeSerializer(serializers.ModelSerializer):
             "id", "raised_by", "status", "resolution",
             "admin_notes", "resolved_by", "created_at", "updated_at",
         ]
+
+
+# ─── Wallet ──────────────────────────────────────────────────────────────────
+
+class WalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = [
+            "id", "owner", "owner_type", "available_balance",
+            "pending_balance", "currency", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WalletTransaction
+        fields = [
+            "id", "tx_type", "direction", "amount", "balance_after",
+            "status", "reference", "description", "related_booking",
+            "metadata", "created_at",
+        ]
+        read_only_fields = fields
+
+
+class SasaPayTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SasaPayTransaction
+        fields = [
+            "id", "kind", "merchant_reference", "checkout_request_id",
+            "provider_reference", "phone", "amount", "status", "created_at",
+        ]
+        read_only_fields = fields
+
+
+class EscrowSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Escrow
+        fields = [
+            "id", "booking", "amount", "fee_amount", "status",
+            "held_at", "released_at",
+        ]
+        read_only_fields = fields

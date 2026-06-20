@@ -327,3 +327,144 @@ class Dispute(models.Model):
 
     def __str__(self):
         return f"Dispute #{self.pk} on Booking #{self.booking_id}"
+
+# ============================
+# WALLET MODELS
+# ============================
+
+class Wallet(models.Model):
+    """One wallet per user (Teacher/School) plus a singleton Platform wallet
+    (owner is NULL for PLATFORM)."""
+
+    class OwnerType(models.TextChoices):
+        TEACHER = "teacher", "Teacher"
+        SCHOOL = "school", "School"
+        PLATFORM = "platform", "Platform"
+
+    owner = models.OneToOneField(
+        UserAccount,
+        on_delete=models.CASCADE,
+        related_name="wallet",
+        null=True,
+        blank=True,
+    )
+    owner_type = models.CharField(max_length=10, choices=OwnerType.choices)
+    available_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    pending_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currency = models.CharField(max_length=8, default="KES")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "wallets"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner_type"],
+                condition=models.Q(owner_type="platform"),
+                name="unique_platform_wallet",
+            ),
+        ]
+
+    def __str__(self):
+        if self.owner_type == self.OwnerType.PLATFORM:
+            return f"Platform Wallet ({self.currency} {self.available_balance})"
+        return f"{self.owner_type} wallet · {self.owner_id}"
+
+
+class WalletTransaction(models.Model):
+    class TxType(models.TextChoices):
+        TOPUP = "topup", "Top-up"
+        BOOKING_HOLD = "booking_hold", "Booking Hold"
+        BOOKING_RELEASE = "booking_release", "Booking Release"
+        BOOKING_REFUND = "booking_refund", "Booking Refund"
+        WITHDRAWAL = "withdrawal", "Withdrawal"
+        FEE = "fee", "Platform Fee"
+        ADJUSTMENT = "adjustment", "Adjustment"
+
+    class Direction(models.TextChoices):
+        CREDIT = "credit", "Credit"
+        DEBIT = "debit", "Debit"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name="transactions")
+    tx_type = models.CharField(max_length=20, choices=TxType.choices)
+    direction = models.CharField(max_length=10, choices=Direction.choices)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    reference = models.CharField(max_length=100, unique=True)
+    description = models.CharField(max_length=255, blank=True)
+    related_booking = models.ForeignKey(
+        Booking, on_delete=models.SET_NULL, null=True, blank=True, related_name="wallet_txs"
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "wallet_transactions"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.direction} {self.amount} · {self.tx_type} ({self.status})"
+
+
+class SasaPayTransaction(models.Model):
+    class Kind(models.TextChoices):
+        C2B = "c2b", "C2B"
+        B2C = "b2c", "B2C"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    kind = models.CharField(max_length=4, choices=Kind.choices)
+    merchant_request_id = models.CharField(max_length=100, blank=True)
+    checkout_request_id = models.CharField(max_length=100, blank=True, db_index=True)
+    merchant_reference = models.CharField(max_length=100, blank=True, db_index=True)
+    provider_reference = models.CharField(max_length=100, blank=True)
+    phone = models.CharField(max_length=20)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    raw_request = models.JSONField(default=dict, blank=True)
+    raw_callback = models.JSONField(default=dict, blank=True)
+    wallet_tx = models.OneToOneField(
+        WalletTransaction, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="sasapay_tx",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "sasapay_transactions"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.kind} {self.amount} · {self.status}"
+
+
+class Escrow(models.Model):
+    class Status(models.TextChoices):
+        HELD = "held", "Held"
+        RELEASED = "released", "Released"
+        REFUNDED = "refunded", "Refunded"
+
+    booking = models.OneToOneField(Booking, on_delete=models.CASCADE, related_name="escrow")
+    school_wallet = models.ForeignKey(Wallet, on_delete=models.PROTECT, related_name="escrows_funded")
+    teacher_wallet = models.ForeignKey(Wallet, on_delete=models.PROTECT, related_name="escrows_due")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    fee_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.HELD)
+    held_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "escrows"
+
+    def __str__(self):
+        return f"Escrow #{self.pk} · Booking #{self.booking_id} · {self.status}"

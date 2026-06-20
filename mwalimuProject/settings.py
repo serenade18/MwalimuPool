@@ -162,5 +162,9 @@ SASAPAY_ENV = "production"  # "sandbox" or "production"
 SASAPAY_CLIENT_ID = "OfB2qOtCYJwStJVz6e75jZ5SFfoKil2lmrAeB8MX"
 SASAPAY_CLIENT_SECRET = "5i5JXDOHHRotx9zrfyiJ2e3UggufLi07En41bThuzQCECDkV0rBJQC5wPMl07Z9rrYBisrCpkIfR09IPNDeFqtUzWYtW8nhXuhT4OPWL3B1c9j4TBRN5RqF66idfYsYB"
 SASAPAY_MERCHANT_CODE = "1468164"
-SASAPAY_C2B_CALLBACK_URL = "https://hona.africa/api/sasapay/c2b/callback/"
-SASAPAY_B2C_CALLBACK_URL = "https://hona.africa/api/sasapay/b2c/callback/"
+SASAPAY_C2B_CALLBACK_URL = "https://mwalimupool.co.ke/api/sasapay/c2b/callback/"
+SASAPAY_B2C_CALLBACK_URL = "https://mwalimupool.co.ke/api/sasapay/b2c/callback/"
+
+# Wallet config
+PLATFORM_FEE_PERCENT = float(os.environ.get("PLATFORM_FEE_PERCENT", "10"))  # %
+MIN_WITHDRAWAL_KES = float(os.environ.get("MIN_WITHDRAWAL_KES", "100"))

@@ -10,6 +10,11 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from mwalimuApp.views import PaymentViewSet, TeacherProfileViewSet, SchoolProfileViewSet, JobPostingViewSet, \
     BookingViewSet, RatingViewSet, DisputeViewSet, UserViewSet
+from mwalimuApp.wallet_views import (
+    WalletViewSet,
+    sasapay_c2b_callback,
+    sasapay_b2c_callback,
+)
 from mwalimuProject import settings
 
 router = DefaultRouter()
@@ -20,10 +25,14 @@ router.register(r"bookings", BookingViewSet, basename="bookings")
 router.register(r"payments", PaymentViewSet, basename="payments")
 router.register(r"ratings", RatingViewSet, basename="ratings")
 router.register(r"disputes", DisputeViewSet, basename="disputes")
+router.register(r"wallet", WalletViewSet, basename="wallet")
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include(router.urls)),
+    # Public SasaPay callbacks (no auth)
+    path("api/public/sasapay/c2b-callback/", sasapay_c2b_callback),
+    path("api/public/sasapay/b2c-callback/", sasapay_b2c_callback),
     path("api/users/", UserViewSet.as_view({"post": "create", "get": "list"})),
     path("api/users/<int:pk>/", UserViewSet.as_view({"get": "retrieve"})),
     path("api/users/<int:pk>/status/", UserViewSet.as_view({"patch": "update_status"})),
