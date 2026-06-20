@@ -149,3 +149,12 @@ CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:8080")
 
 AUTH_USER_MODEL = 'mwalimuApp.UserAccount'
+
+# SasaPay Credentials (https://docs.sasapay.app)
+# Used to power wallet C2B (deposits) and B2C (withdrawals/payouts).
+SASAPAY_ENV = "production"  # "sandbox" or "production"
+SASAPAY_CLIENT_ID = "OfB2qOtCYJwStJVz6e75jZ5SFfoKil2lmrAeB8MX"
+SASAPAY_CLIENT_SECRET = "5i5JXDOHHRotx9zrfyiJ2e3UggufLi07En41bThuzQCECDkV0rBJQC5wPMl07Z9rrYBisrCpkIfR09IPNDeFqtUzWYtW8nhXuhT4OPWL3B1c9j4TBRN5RqF66idfYsYB"
+SASAPAY_MERCHANT_CODE = "1468164"
+SASAPAY_C2B_CALLBACK_URL = "https://hona.africa/api/sasapay/c2b/callback/"
+SASAPAY_B2C_CALLBACK_URL = "https://hona.africa/api/sasapay/b2c/callback/"
