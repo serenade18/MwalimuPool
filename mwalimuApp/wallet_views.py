@@ -36,6 +36,9 @@ from mwalimuApp.wallet_service import (
     initiate_withdrawal,
     refund_escrow,
     release_escrow,
+    admin_approve_transaction,
+    admin_reject_transaction,
+    admin_approve_all_pending,
 )
 
 
@@ -68,6 +71,8 @@ class WalletViewSet(viewsets.ViewSet):
         if self.action in ("topup", "topup_status", "book"):
             return [IsAuthenticated()]
         if self.action in ("release", "refund", "admin_overview", "admin_reconciliation"):
+            return [IsAdminRole()]
+        if self.action in ("admin_approve_tx", "admin_reject_tx", "admin_approve_all"):
             return [IsAdminRole()]
         return [IsAuthenticated()]
 
@@ -375,6 +380,53 @@ class WalletViewSet(viewsets.ViewSet):
                 sp_qs.order_by("-created_at")[:limit], many=True).data,
             "wallet_transactions": wt_rows,
             "escrows": escrow_rows,
+        })
+
+    # POST /wallet/admin/transactions/<id>/approve/
+    @action(detail=False, methods=["post"],
+            url_path=r"admin/transactions/(?P<tx_id>[0-9]+)/approve")
+    def admin_approve_tx(self, request, tx_id=None):
+        try:
+            wt = admin_approve_transaction(
+                int(tx_id), admin=request.user,
+                note=str(request.data.get("note", "")),
+            )
+        except WalletTransaction.DoesNotExist:
+            return Response({"error": True, "message": "Transaction not found"},
+                            status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            "error": False,
+            "message": "Transaction approved",
+            "data": WalletTransactionSerializer(wt).data,
+        })
+
+    # POST /wallet/admin/transactions/<id>/reject/
+    @action(detail=False, methods=["post"],
+            url_path=r"admin/transactions/(?P<tx_id>[0-9]+)/reject")
+    def admin_reject_tx(self, request, tx_id=None):
+        try:
+            wt = admin_reject_transaction(
+                int(tx_id), admin=request.user,
+                reason=str(request.data.get("reason", "")),
+            )
+        except WalletTransaction.DoesNotExist:
+            return Response({"error": True, "message": "Transaction not found"},
+                            status=status.HTTP_404_NOT_FOUND)
+        return Response({
+            "error": False,
+            "message": "Transaction rejected",
+            "data": WalletTransactionSerializer(wt).data,
+        })
+
+    # POST /wallet/admin/transactions/approve-all/
+    @action(detail=False, methods=["post"], url_path="admin/transactions/approve-all")
+    def admin_approve_all(self, request):
+        tx_type = request.data.get("tx_type") or None
+        ids = admin_approve_all_pending(admin=request.user, tx_type=tx_type)
+        return Response({
+            "error": False,
+            "message": f"Approved {len(ids)} pending transaction(s)",
+            "approved_ids": ids,
         })
 
 

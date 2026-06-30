@@ -447,3 +447,111 @@ def refund_escrow(booking: Booking, reason: str = "") -> Escrow:
         booking.payment_status = "refunded"
         booking.save(update_fields=["payment_status", "updated_at"])
     return escrow
+
+
+# ---------------------------------------------------------------------------
+# Admin manual approval / rejection of pending wallet transactions
+# ---------------------------------------------------------------------------
+
+def admin_approve_transaction(tx_id: int, *, admin: UserAccount,
+                              note: str = "") -> WalletTransaction:
+    """Force-complete a PENDING wallet transaction.
+
+    - TOPUP    : credit the wallet, mark success, mark linked SasaPay tx success.
+    - WITHDRAWAL: funds already reserved at initiation, so just mark success
+                  and mark linked SasaPay tx success.
+    - other    : flip status to success (no balance change).
+    """
+    with transaction.atomic():
+        wt = WalletTransaction.objects.select_for_update().get(pk=tx_id)
+        if wt.status != WalletTransaction.Status.PENDING:
+            return wt
+
+        if wt.tx_type == WalletTransaction.TxType.TOPUP:
+            wallet = _lock(wt.wallet_id)
+            wallet.available_balance = (
+                Decimal(wallet.available_balance) + Decimal(wt.amount)
+            ).quantize(TWO)
+            wallet.save(update_fields=["available_balance", "updated_at"])
+            wt.balance_after = wallet.available_balance
+
+        wt.status = WalletTransaction.Status.SUCCESS
+        wt.metadata = {
+            **(wt.metadata or {}),
+            "admin_approved_by": getattr(admin, "id", None),
+            "admin_approved_at": timezone.now().isoformat(),
+            "admin_note": note,
+        }
+        wt.save(update_fields=["status", "balance_after", "metadata", "updated_at"])
+
+        sp = SasaPayTransaction.objects.filter(wallet_tx=wt).first()
+        if sp and sp.status != SasaPayTransaction.Status.SUCCESS:
+            sp.status = SasaPayTransaction.Status.SUCCESS
+            sp.raw_callback = {
+                **(sp.raw_callback or {}),
+                "_admin_override": True,
+                "_admin_id": getattr(admin, "id", None),
+            }
+            sp.save(update_fields=["status", "raw_callback", "updated_at"])
+    return wt
+
+
+def admin_reject_transaction(tx_id: int, *, admin: UserAccount,
+                             reason: str = "") -> WalletTransaction:
+    """Force-fail a PENDING wallet transaction.
+
+    - WITHDRAWAL : refund reserved amount back to the wallet.
+    - TOPUP / etc: just mark failed.
+    """
+    with transaction.atomic():
+        wt = WalletTransaction.objects.select_for_update().get(pk=tx_id)
+        if wt.status != WalletTransaction.Status.PENDING:
+            return wt
+
+        if wt.tx_type == WalletTransaction.TxType.WITHDRAWAL:
+            wallet = _lock(wt.wallet_id)
+            _credit(
+                wallet, wt.amount,
+                tx_type=WalletTransaction.TxType.ADJUSTMENT,
+                reference=_new_ref("wd-refund"),
+                description=f"Admin refund for rejected withdrawal {wt.reference}",
+                metadata={"failed_ref": wt.reference, "reason": reason,
+                          "admin_id": getattr(admin, "id", None)},
+            )
+
+        wt.status = WalletTransaction.Status.FAILED
+        wt.metadata = {
+            **(wt.metadata or {}),
+            "admin_rejected_by": getattr(admin, "id", None),
+            "admin_rejected_at": timezone.now().isoformat(),
+            "admin_reason": reason,
+        }
+        wt.save(update_fields=["status", "metadata", "updated_at"])
+
+        sp = SasaPayTransaction.objects.filter(wallet_tx=wt).first()
+        if sp and sp.status != SasaPayTransaction.Status.FAILED:
+            sp.status = SasaPayTransaction.Status.FAILED
+            sp.raw_callback = {
+                **(sp.raw_callback or {}),
+                "_admin_override": True,
+                "_admin_id": getattr(admin, "id", None),
+                "_reason": reason,
+            }
+            sp.save(update_fields=["status", "raw_callback", "updated_at"])
+    return wt
+
+
+def admin_approve_all_pending(*, admin: UserAccount, tx_type: Optional[str] = None) -> list[int]:
+    qs = WalletTransaction.objects.filter(status=WalletTransaction.Status.PENDING)
+    if tx_type:
+        qs = qs.filter(tx_type=tx_type)
+    ids = list(qs.values_list("id", flat=True))
+    approved: list[int] = []
+    for tx_id in ids:
+        try:
+            wt = admin_approve_transaction(tx_id, admin=admin, note="bulk approve")
+            if wt.status == WalletTransaction.Status.SUCCESS:
+                approved.append(tx_id)
+        except Exception:  # noqa: BLE001
+            continue
+    return approved
