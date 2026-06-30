@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from django.db.models import Q, Sum
+from django.utils.dateparse import parse_datetime, parse_date
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -35,6 +36,7 @@ from mwalimuApp.wallet_service import (
     refund_escrow,
     release_escrow,
 )
+from mwalimuApp.service import SasaPayService
 
 
 def _parse_amount(raw) -> Decimal:
@@ -65,7 +67,7 @@ class WalletViewSet(viewsets.ViewSet):
             return [IsTeacherRole()]
         if self.action in ("topup", "topup_status", "book"):
             return [IsAuthenticated()]
-        if self.action in ("release", "refund", "admin_overview"):
+        if self.action in ("release", "refund", "admin_overview", "admin_reconciliation"):
             return [IsAdminRole()]
         return [IsAuthenticated()]
 
@@ -126,6 +128,36 @@ class WalletViewSet(viewsets.ViewSet):
         if not sp:
             return Response({"error": True, "message": "Not found"},
                             status=status.HTTP_404_NOT_FOUND)
+        # Actively reconcile if the async callback hasn't arrived yet.
+        if sp.status == SasaPayTransaction.Status.PENDING:
+            try:
+                resp = SasaPayService().transaction_status(
+                    checkout_request_id=sp.checkout_request_id or None,
+                    merchant_reference=sp.merchant_reference,
+                )
+                # Normalise SasaPay's status payload into the callback shape
+                # so handle_c2b_callback can finalise the wallet credit.
+                rc = resp.get("ResultCode", resp.get("resultCode"))
+                status_str = (resp.get("TransactionStatus")
+                              or resp.get("status")
+                              or "").upper()
+                if rc is not None or status_str in ("SUCCESS", "COMPLETED", "FAILED", "CANCELLED"):
+                    handle_c2b_callback({
+                        "CheckoutRequestID": sp.checkout_request_id,
+                        "MerchantRequestID": sp.merchant_request_id,
+                        "AccountReference": sp.merchant_reference,
+                        "ResultCode": rc if rc is not None else (
+                            "0" if status_str in ("SUCCESS", "COMPLETED") else "1"
+                        ),
+                        "TransactionReceipt": resp.get("TransactionReceipt")
+                            or resp.get("TransactionID") or "",
+                        "status": status_str or None,
+                        "_source": "poll",
+                    })
+                    sp.refresh_from_db()
+            except Exception:  # noqa: BLE001
+                # Polling is best-effort; never fail the status request.
+                pass
         return Response({
             "error": False,
             "data": SasaPayTransactionSerializer(sp).data,
@@ -225,6 +257,124 @@ class WalletViewSet(viewsets.ViewSet):
             "total_fees_earned": str(totals.get("fees") or 0),
             "total_held_in_escrow": str(held),
             "pending_withdrawals": WalletTransactionSerializer(pending_withdrawals, many=True).data,
+        })
+
+    # GET /wallet/admin/reconciliation/
+    @action(detail=False, methods=["get"], url_path="admin/reconciliation")
+    def admin_reconciliation(self, request):
+        """Unified reconciliation view: callbacks, wallet txs, escrows.
+
+        Filters (all optional):
+          date_from, date_to (YYYY-MM-DD or ISO datetime)
+          teacher_id  -> filters wallet txs on teacher's wallet + escrows.teacher_wallet
+          booking_id  -> filters wallet txs.related_booking + escrows.booking
+          status      -> matches sasapay/wallet/escrow status
+          kind        -> c2b | b2c (sasapay only)
+          limit       -> per-section cap (default 100)
+        """
+        q = request.query_params
+        date_from = q.get("date_from")
+        date_to = q.get("date_to")
+        teacher_id = q.get("teacher_id")
+        booking_id = q.get("booking_id")
+        status_f = q.get("status")
+        kind = q.get("kind")
+        try:
+            limit = max(1, min(int(q.get("limit", 100)), 500))
+        except (TypeError, ValueError):
+            limit = 100
+
+        def _to_dt(v):
+            if not v:
+                return None
+            return parse_datetime(v) or parse_date(v)
+
+        df = _to_dt(date_from)
+        dt = _to_dt(date_to)
+
+        # SasaPay callbacks
+        sp_qs = SasaPayTransaction.objects.all()
+        if df:
+            sp_qs = sp_qs.filter(created_at__gte=df)
+        if dt:
+            sp_qs = sp_qs.filter(created_at__lte=dt)
+        if status_f:
+            sp_qs = sp_qs.filter(status=status_f)
+        if kind:
+            sp_qs = sp_qs.filter(kind=kind)
+        if booking_id:
+            sp_qs = sp_qs.filter(wallet_tx__related_booking_id=booking_id)
+        if teacher_id:
+            sp_qs = sp_qs.filter(wallet_tx__wallet__owner_id=teacher_id)
+
+        # Wallet transactions
+        wt_qs = WalletTransaction.objects.select_related("wallet").all()
+        if df:
+            wt_qs = wt_qs.filter(created_at__gte=df)
+        if dt:
+            wt_qs = wt_qs.filter(created_at__lte=dt)
+        if status_f:
+            wt_qs = wt_qs.filter(status=status_f)
+        if booking_id:
+            wt_qs = wt_qs.filter(related_booking_id=booking_id)
+        if teacher_id:
+            wt_qs = wt_qs.filter(wallet__owner_id=teacher_id)
+
+        # Escrows
+        es_qs = Escrow.objects.select_related("booking", "teacher_wallet", "school_wallet").all()
+        if df:
+            es_qs = es_qs.filter(held_at__gte=df)
+        if dt:
+            es_qs = es_qs.filter(held_at__lte=dt)
+        if status_f:
+            es_qs = es_qs.filter(status=status_f)
+        if booking_id:
+            es_qs = es_qs.filter(booking_id=booking_id)
+        if teacher_id:
+            es_qs = es_qs.filter(teacher_wallet__owner_id=teacher_id)
+
+        reserved_total = es_qs.filter(status=Escrow.Status.HELD).aggregate(
+            s=Sum("amount"))["s"] or 0
+
+        escrow_rows = []
+        for e in es_qs.order_by("-held_at")[:limit]:
+            escrow_rows.append({
+                "id": e.id,
+                "booking_id": e.booking_id,
+                "amount": str(e.amount),
+                "fee_amount": str(e.fee_amount),
+                "status": e.status,
+                "held_at": e.held_at,
+                "released_at": e.released_at,
+                "teacher_id": e.teacher_wallet.owner_id,
+                "school_id": e.school_wallet.owner_id,
+            })
+
+        wt_rows = []
+        for w in wt_qs.order_by("-created_at")[:limit]:
+            wt_rows.append({
+                **WalletTransactionSerializer(w).data,
+                "wallet_owner_id": w.wallet.owner_id,
+                "wallet_owner_type": w.wallet.owner_type,
+            })
+
+        return Response({
+            "error": False,
+            "filters": {
+                "date_from": date_from, "date_to": date_to,
+                "teacher_id": teacher_id, "booking_id": booking_id,
+                "status": status_f, "kind": kind, "limit": limit,
+            },
+            "totals": {
+                "reserved_in_escrow": str(reserved_total),
+                "sasapay_count": sp_qs.count(),
+                "wallet_tx_count": wt_qs.count(),
+                "escrow_count": es_qs.count(),
+            },
+            "sasapay": SasaPayTransactionSerializer(
+                sp_qs.order_by("-created_at")[:limit], many=True).data,
+            "wallet_transactions": wt_rows,
+            "escrows": escrow_rows,
         })
 
 

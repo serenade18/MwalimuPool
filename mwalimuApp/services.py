@@ -105,6 +105,31 @@ class SasaPayService:
         response.raise_for_status()
         return response.json()
 
+    def transaction_status(self, checkout_request_id=None, merchant_reference=None):
+        """Query SasaPay for the current state of a C2B transaction.
+
+        Used to actively reconcile pending top-ups when the async callback
+        is delayed or never arrives (common in sandbox / behind NAT)."""
+        url = f"{self.base_url}/transactions/status/"
+        payload = {"MerchantCode": self.merchant_code}
+        if checkout_request_id:
+            payload["CheckoutRequestID"] = str(checkout_request_id)
+        if merchant_reference:
+            payload["MerchantTransactionReference"] = str(merchant_reference)
+        response = requests.post(
+            url, headers=self._auth_headers(), json=payload, timeout=30
+        )
+        if not response.ok:
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+            raise requests.HTTPError(
+                f"SasaPay status {response.status_code}: {body}",
+                response=response,
+            )
+        return response.json()
+
     # ------------------------------------------------------------------
     # B2C — disburse funds from merchant Utility account to a customer
     # ------------------------------------------------------------------
