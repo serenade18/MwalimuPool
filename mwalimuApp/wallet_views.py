@@ -25,6 +25,7 @@ from mwalimuApp.serializers import (
     WalletSerializer,
     WalletTransactionSerializer,
 )
+from mwalimuApp.services import SasaPayService
 from mwalimuApp.wallet_service import (
     get_platform_wallet,
     get_user_wallet,
@@ -36,7 +37,6 @@ from mwalimuApp.wallet_service import (
     refund_escrow,
     release_escrow,
 )
-from mwalimuApp.service import SasaPayService
 
 
 def _parse_amount(raw) -> Decimal:
